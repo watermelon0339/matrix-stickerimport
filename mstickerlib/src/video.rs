@@ -12,7 +12,7 @@ use ffmpeg::{
 use std::path::Path;
 use webp_animation::{Encoder, WebPData};
 
-pub(crate) fn webm2webp<P: AsRef<Path>>(file: &P) -> Result<(WebPData, u32, u32), Error> {
+pub(crate) fn webm2webp<P: AsRef<Path>>(file: &P, width: Option<u32>, height: Option<u32>) -> Result<(WebPData, u32, u32), Error> {
 	// heavily inspired by
 	// https://github.com/zmwangx/rust-ffmpeg/blob/master/examples/dump-frames.rs
 
@@ -23,17 +23,20 @@ pub(crate) fn webm2webp<P: AsRef<Path>>(file: &P) -> Result<(WebPData, u32, u32)
 	let ctx_decoder = CodecContext::from_parameters(input.parameters())?;
 	let mut decoder = ctx_decoder.decoder().video()?;
 
+	let new_width = width.unwrap_or(decoder.width());
+	let new_height = height.unwrap_or(decoder.height());
+
 	let mut scaler = ScalingContext::get(
 		decoder.format(),
 		decoder.width(),
 		decoder.height(),
 		Pixel::RGBA,
-		decoder.width(),
-		decoder.height(),
+		new_width.clone(),
+		new_height.clone(),
 		Flags::BILINEAR
 	)?;
 
-	let mut encoder = Encoder::new((decoder.width(), decoder.height()))?;
+	let mut encoder = Encoder::new((new_width.clone(), new_height.clone()))?;
 	let mut timestamp = 0;
 	let frame_rate = input.rate();
 	let time_per_frame = frame_rate.1 * 1000 / frame_rate.0;
@@ -59,5 +62,5 @@ pub(crate) fn webm2webp<P: AsRef<Path>>(file: &P) -> Result<(WebPData, u32, u32)
 	receive_and_process_decoded_frames(&mut decoder)?;
 
 	let webp = encoder.finalize(timestamp)?;
-	Ok((webp, decoder.width(), decoder.height()))
+	Ok((webp, new_width, new_height))
 }

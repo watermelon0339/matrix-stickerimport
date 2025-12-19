@@ -7,8 +7,10 @@ use crate::{
 	matrix::{self, sticker_formats::ponies, Mxc},
 	CLIENT
 };
+use anyhow::Context;
 use derive_getters::Getters;
 use serde::Deserialize;
+use tokio::fs;
 
 #[cfg(feature = "log")]
 use log::{info, warn};
@@ -74,19 +76,27 @@ impl PhotoSize {
 		#[cfg(feature = "log")]
 		let emoji = emoji.unwrap_or_default();
 		#[cfg(feature = "log")]
-		let thumb = if thumb { "(Thumbnail)" } else { "" };
+		let thumbstr = if thumb { "(Thumbnail)" } else { "" };
 		#[cfg(feature = "log")]
-		info!("download sticker {pack_name}:{positon:03} {emoji:<2} {thumb}");
+		info!("download sticker {pack_name}:{positon:03} {emoji:<2} {thumbstr}");
 		// download and convert sticker from telegram
 		let mut image = self.download(tg_config).await?;
 		image = image.unpack_tgs().await?;
+		let sticker_size = 256;
+		let thumbnail_size = 64;
+		let mut animated_thumbnail: Image = image.clone();
+		if image.file_name.ends_with(".webp") {
+			image = image.resize(sticker_size as u32, sticker_size as u32)?;
+			animated_thumbnail = animated_thumbnail.resize(thumbnail_size as u32, thumbnail_size as u32)?;
+		}
 		if image.file_name.ends_with(".lottie") && !advance_config.keep_lottie {
 			// file extension is now checked double.
 			// Here and inside `convert_...`
 			// But `convert_...` function does not exist, if feature is dissable.
 			#[cfg(feature = "lottie")]
 			{
-				image = image.convert_lottie(advance_config.animation_format).await?;
+				image = image.convert_lottie(advance_config.animation_format, Some(sticker_size as u32), Some(sticker_size as u32)).await?;
+				animated_thumbnail = animated_thumbnail.convert_lottie(advance_config.animation_format, Some(thumbnail_size as u32), Some(thumbnail_size as u32)).await?;
 			}
 			#[cfg(not(feature = "lottie"))]
 			return Err(Error::UnsupportedFormat(crate::error::UnsupportedFormat::Lottie));
@@ -94,13 +104,14 @@ impl PhotoSize {
 		if image.file_name.ends_with(".webm") && !advance_config.keep_webm {
 			#[cfg(feature = "ffmpeg")]
 			{
-				image = image.convert_webm2webp().await?;
+				image = image.convert_webm2webp(Some(sticker_size as u32), Some(sticker_size as u32)).await?;
+				animated_thumbnail = animated_thumbnail.convert_webm2webp(Some(thumbnail_size as u32), Some(thumbnail_size as u32)).await?;
 			}
 			#[cfg(not(feature = "ffmpeg"))]
 			return Err(Error::UnsupportedFormat(crate::error::UnsupportedFormat::Webm));
 		}
 		#[cfg(feature = "log")]
-		info!("  upload sticker {pack_name}:{positon:03} {emoji:<2} {thumb}");
+		info!("  upload sticker {pack_name}:{positon:03} {emoji:<2} {thumbstr}");
 		let mxc = if advance_config.dry_run {
 			#[cfg(feature = "log")]
 			{
@@ -113,6 +124,10 @@ impl PhotoSize {
 			if !has_uploded {
 				info!("  upload skipped; file with this hash was already uploaded");
 			}
+			let media_id = mxc.strip_prefix("mxc://").unwrap_or_default().split('/').nth(1).unwrap_or_default();
+			let path = format!("./thumbnails/{}", media_id);
+			fs::write(&path, animated_thumbnail.data.as_ref())
+				.await;
 			#[cfg(not(feature = "log"))]
 			let _ = has_uploded; //fix unused warning
 			mxc

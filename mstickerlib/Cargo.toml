@@ -23,6 +23,7 @@ log = { version = "0.4.17", optional = true }
 lottieconv = { version = "0.3.0", features = ["serde"], optional = true  }
 monostate = "0.1"
 once_cell = "1.8"
+photon-rs = "0.3.3"
 rayon = "1.5"
 reqwest = { version = "0.12.3", features = ["json", "rustls-tls",], default-features = false } # TODO: check for compression option
 serde = { version = "1.0.184", features = ["derive"] }

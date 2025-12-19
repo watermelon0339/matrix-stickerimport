@@ -16,6 +16,12 @@ use strum_macros::Display;
 #[cfg(feature = "lottie")]
 use tempfile::NamedTempFile;
 
+use photon_rs::transform;
+use photon_rs::native::{open_image_from_bytes, image_to_bytes};
+
+#[cfg(feature = "log")]
+use log::{info, warn};
+
 // todo: remove copy trait. Or will gif support droppet first?
 #[derive(Clone, Copy, Debug, Default, Deserialize, Display)]
 #[serde(tag = "animation_format", rename_all = "lowercase")]
@@ -27,6 +33,7 @@ pub enum AnimationFormat {
 	Webp
 }
 
+#[derive(Clone)]
 /// Generic image struct, containing the image data and its meta data.
 pub struct Image {
 	pub file_name: String,
@@ -84,7 +91,9 @@ impl Image {
 
 	/// convert `tgs` image to webp or gif, ignore other formats
 	#[cfg(feature = "lottie")]
-	pub async fn convert_lottie(self, animation_format: AnimationFormat) -> Result<Self, Error> {
+	pub async fn convert_lottie(self, animation_format: AnimationFormat, max_width: Option<u32>, max_height: Option<u32>) -> Result<Self, Error> {
+		use lottieconv::Size;
+
 		if !self.file_name.ends_with(".lottie") {
 			return Ok(self);
 		}
@@ -97,22 +106,28 @@ impl Image {
 				tmp.flush()?;
 				let animation = Animation::from_file(tmp.path()).ok_or_else(|| Error::AnimationLoadError)?;
 				let size = animation.size();
+				let aspect_ratio = size.width.clone() as f32 / size.height.clone() as f32;
+				let (new_width, new_height) = Self::resize_preserving_aspect_ratio(size.width as u32, size.height as u32, max_width, max_height);
+				let new_size = Size {
+					width: new_width as usize,
+					height: new_height as usize
+				};
 				image.file_name.truncate(image.file_name.len() - 6);
 				let converter = Converter::new(animation);
 				match animation_format {
 					AnimationFormat::Gif { transparent_color } => {
 						let mut data = Vec::new();
-						converter.gif(transparent_color, &mut data)?.convert()?;
+						converter.with_size(new_size).gif(transparent_color, &mut data)?.convert()?;
 						image.data = Arc::new(data);
 						image.file_name += "gif";
 					},
 					AnimationFormat::Webp => {
-						image.data = Arc::new(converter.webp()?.convert()?.to_vec());
+						image.data = Arc::new(converter.with_size(new_size).webp()?.convert()?.to_vec());
 						image.file_name += "webp";
 					}
 				}
-				image.width = size.width as u32;
-				image.height = size.height as u32;
+				image.width = new_size.width as u32;
+				image.height = new_size.height as u32;
 				Ok(image)
 			})
 		})
@@ -121,7 +136,7 @@ impl Image {
 
 	#[cfg(feature = "ffmpeg")]
 	/// convert `webm` video stickers to webp, ignore other formats
-	pub async fn convert_webm2webp(mut self) -> Result<Self, Error> {
+	pub async fn convert_webm2webp(mut self, new_width: Option<u32>, new_height: Option<u32>) -> Result<Self, Error> {
 		if !self.file_name.ends_with(".webm") {
 			return Ok(self);
 		}
@@ -134,7 +149,7 @@ impl Image {
 
 				self.file_name.truncate(self.file_name.len() - 1);
 				self.file_name += "p";
-				let (webp, width, height) = webm2webp(&tmp.path())?;
+				let (webp, width, height) = webm2webp(&tmp.path(), new_width, new_height)?;
 				self.data = Arc::new(webp.to_vec());
 				self.width = width;
 				self.height = height;
@@ -165,5 +180,53 @@ impl Image {
 			db.add(*hash, mxc.url().to_owned()).await.map_err(Error::Database)?;
 		}
 		Ok((mxc, true))
+	}
+
+	fn resize_preserving_aspect_ratio(
+		width: u32,
+		height: u32,
+		max_width: Option<u32>,
+		max_height: Option<u32>
+	) -> (u32, u32) {
+		let aspect_ratio = width as f64 / height as f64;
+	
+		match (max_width, max_height) {
+			(None, None) => (width, height),
+			(Some(w), None) => {
+				let new_width = w as f64;
+				let new_height = new_width / aspect_ratio;
+				return (new_width.round() as u32, new_height.round() as u32);
+			},
+			(None, Some(h)) => {
+				let new_height = h as f64;
+				let new_width = new_height * aspect_ratio;
+				return (new_width.round() as u32, new_height.round() as u32);
+			},
+			(Some(w), Some(h)) => {
+				let max_w = w as f64;
+				let max_h = h as f64;
+		
+				let scale_w = max_w / width as f64;
+				let scale_h = max_h / height as f64;
+				let scale = scale_w.min(scale_h);
+		
+				let new_width = (width as f64 * scale).round();
+				let new_height = (height as f64 * scale).round();
+		
+				return (new_width as u32, new_height as u32);
+			}
+		}
+	}
+
+	pub fn resize(mut self, max_width: u32, max_height: u32) -> Result<Self, Error> {
+		let mut img = open_image_from_bytes(&self.data).unwrap();
+		let img_width = img.clone().get_width();
+		let img_height = img.clone().get_height();
+		let (width, height) = Self::resize_preserving_aspect_ratio(img_width, img_height, Some(max_width), Some(max_height));
+		img = transform::resize(&mut img, width, height, transform::SamplingFilter::Lanczos3);
+		self.data = Arc::new(img.get_bytes_webp().to_vec());
+		self.width = width;
+		self.height = height;
+		return Ok(self);
 	}
 }
