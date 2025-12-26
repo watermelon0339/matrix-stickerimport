@@ -101,3 +101,7 @@ Check out [rust doc](https://doc.rust-lang.org/cargo/commands/cargo-install.html
 ## Usage
 
 https://aeolian-fur-083.notion.site/matrix-stickerpicker
+
+https://t.me/addstickers/LittleCuteTurtle
+https://t.me/addstickers/LittleGreenLion
+https://t.me/addstickers/EggYolkFace
